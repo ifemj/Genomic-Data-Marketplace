@@ -1,69 +1,86 @@
-;; DNA Data Contract
+;; Research Proposal Contract
 
 ;; Define data structures
-(define-map dna-records
-  { dna-id: uint }
+(define-map research-proposals
+  { proposal-id: uint }
   {
-    owner: principal,
-    encrypted-data: (string-utf8 1024),
-    metadata: (string-utf8 256),
-    last-updated: uint
+    researcher: principal,
+    title: (string-utf8 256),
+    description: (string-utf8 1024),
+    required-sample-size: uint,
+    status: (string-ascii 20),
+    approved-count: uint
   }
 )
 
-(define-data-var next-dna-id uint u1)
+(define-map dna-approvals
+  { proposal-id: uint, dna-id: uint }
+  { approved: bool }
+)
+
+(define-data-var next-proposal-id uint u1)
+
+;; Constants
+(define-constant STATUS-PENDING "PENDING")
+(define-constant STATUS-APPROVED "APPROVED")
+(define-constant STATUS-REJECTED "REJECTED")
 
 ;; Error codes
-(define-constant err-not-owner (err u100))
 (define-constant err-not-found (err u101))
+(define-constant err-already-approved (err u102))
+(define-constant err-not-owner (err u103))
 
 ;; Functions
-(define-public (submit-dna-data (encrypted-data (string-utf8 1024)) (metadata (string-utf8 256)))
+(define-public (submit-proposal (title (string-utf8 256)) (description (string-utf8 1024)) (required-sample-size uint))
   (let
-    ((dna-id (var-get next-dna-id)))
-    (map-set dna-records
-      { dna-id: dna-id }
+    ((proposal-id (var-get next-proposal-id)))
+    (map-set research-proposals
+      { proposal-id: proposal-id }
       {
-        owner: tx-sender,
-        encrypted-data: encrypted-data,
-        metadata: metadata,
-        last-updated: block-height
+        researcher: tx-sender,
+        title: title,
+        description: description,
+        required-sample-size: required-sample-size,
+        status: STATUS-PENDING,
+        approved-count: u0
       }
     )
-    (var-set next-dna-id (+ dna-id u1))
-    (ok dna-id)
+    (var-set next-proposal-id (+ proposal-id u1))
+    (ok proposal-id)
   )
 )
 
-(define-public (update-dna-data (dna-id uint) (encrypted-data (string-utf8 1024)) (metadata (string-utf8 256)))
-  (match (map-get? dna-records { dna-id: dna-id })
-    record (begin
-      (asserts! (is-eq (get owner record) tx-sender) err-not-owner)
-      (ok (map-set dna-records
-        { dna-id: dna-id }
-        {
-          owner: (get owner record),
-          encrypted-data: encrypted-data,
-          metadata: metadata,
-          last-updated: block-height
-        }
+(define-public (approve-proposal (proposal-id uint) (dna-id uint))
+  (let
+    ((proposal (unwrap! (map-get? research-proposals { proposal-id: proposal-id }) err-not-found)))
+    (asserts! (is-none (map-get? dna-approvals { proposal-id: proposal-id, dna-id: dna-id })) err-already-approved)
+    (map-set dna-approvals { proposal-id: proposal-id, dna-id: dna-id } { approved: true })
+    (let
+      ((new-approved-count (+ (get approved-count proposal) u1))
+       (new-status (if (>= new-approved-count (get required-sample-size proposal))
+                       STATUS-APPROVED
+                       (get status proposal))))
+      (ok (map-set research-proposals
+        { proposal-id: proposal-id }
+        (merge proposal
+          {
+            approved-count: new-approved-count,
+            status: new-status
+          }
+        )
       ))
     )
-    err-not-found
   )
 )
 
-(define-read-only (get-dna-metadata (dna-id uint))
-  (match (map-get? dna-records { dna-id: dna-id })
-    record (ok (get metadata record))
-    err-not-found
-  )
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? research-proposals { proposal-id: proposal-id })
 )
 
-(define-read-only (get-dna-owner (dna-id uint))
-  (match (map-get? dna-records { dna-id: dna-id })
-    record (ok (get owner record))
-    err-not-found
+(define-read-only (check-dna-approval (proposal-id uint) (dna-id uint))
+  (default-to
+    false
+    (get approved (map-get? dna-approvals { proposal-id: proposal-id, dna-id: dna-id }))
   )
 )
 
